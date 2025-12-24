@@ -40,6 +40,26 @@ else:
 InferInput = t.Union["tritongrpcclient.InferInput", "tritonhttpclient.InferInput"]
 
 
+def _get_zero_copy_enabled() -> bool:
+    """Get whether zero-copy is enabled from config module."""
+    try:
+        from _bentoml_impl.zero_copy_config import get_zero_copy_enabled
+
+        return get_zero_copy_enabled()
+    except ImportError:
+        return False
+
+
+def _get_preallocate_threshold() -> int:
+    """Get the pre-allocation threshold from config."""
+    try:
+        from _bentoml_impl.zero_copy_config import get_default_config
+
+        return get_default_config().preallocate_batch_threshold
+    except ImportError:
+        return 4  # Default value
+
+
 class Payload(t.NamedTuple):
     data: bytes
     meta: dict[str, bool | int | float | str | list[int]]
@@ -205,18 +225,79 @@ class TritonInferInputDataContainer(DataContainer[InferInput, InferInput]):
 
 
 class NdarrayContainer(DataContainer["ext.NpNDArray", "ext.NpNDArray"]):
+    """
+    Container for NumPy ndarray with zero-copy optimization support.
+
+    When zero_copy is enabled at the service level:
+    - Uses pre-allocated buffers for large batches to reduce memory fragmentation
+    - Returns views from batch_to_batches when possible (zero-copy)
+    - Avoids unnecessary contiguity conversions
+
+    The pre-allocation threshold is configurable via the zero_copy.preallocate_batch_threshold
+    service configuration.
+    """
+
     @classmethod
     def batches_to_batch(
         cls,
         batches: t.Sequence[ext.NpNDArray],
         batch_dim: int = 0,
     ) -> tuple[ext.NpNDArray, list[int]]:
-        # numpy.concatenate may consume lots of memory, need optimization later
-        batch: ext.NpNDArray = np.concatenate(batches, axis=batch_dim)
-        indices = list(
-            itertools.accumulate(subbatch.shape[batch_dim] for subbatch in batches)
-        )
-        indices = [0] + indices
+        """
+        Combine multiple arrays into a single batch with optimized memory handling.
+
+        Optimization strategies based on zero_copy setting:
+
+        When zero_copy is disabled or batch count <= threshold:
+        - Uses np.concatenate (simpler, efficient for small batches)
+
+        When zero_copy is enabled and batch count > threshold:
+        - Pre-allocates output buffer using np.empty
+        - Copies each sub-batch in-place to reduce memory fragmentation
+        - Avoids multiple intermediate allocations
+
+        Note: True zero-copy is not possible here since we need a contiguous
+        output array, but pre-allocation minimizes the number of allocations.
+        """
+        if not batches:
+            raise ValueError("Cannot create batch from empty sequence")
+
+        # Calculate total size and indices
+        sizes = [subbatch.shape[batch_dim] for subbatch in batches]
+        indices = [0]
+        for size in sizes:
+            indices.append(indices[-1] + size)
+        total_size = indices[-1]
+
+        # Get configuration
+        zero_copy = _get_zero_copy_enabled()
+        threshold = _get_preallocate_threshold()
+
+        # For small batches or when zero_copy is disabled, np.concatenate is efficient enough
+        if len(batches) <= threshold or not zero_copy:
+            batch: ext.NpNDArray = np.concatenate(batches, axis=batch_dim)
+            return batch, indices
+
+        # For larger batches with zero_copy enabled, pre-allocate and copy in-place
+        # This reduces memory fragmentation and intermediate allocations
+        first = batches[0]
+        batch_shape = list(first.shape)
+        batch_shape[batch_dim] = total_size
+
+        # Pre-allocate the output buffer
+        batch = np.empty(batch_shape, dtype=first.dtype)
+
+        # Copy each sub-batch in-place using slicing
+        current_idx = 0
+        for subbatch in batches:
+            subbatch_size = subbatch.shape[batch_dim]
+            # Create slice for the batch dimension
+            slices: list[t.Any] = [slice(None)] * len(batch_shape)
+            slices[batch_dim] = slice(current_idx, current_idx + subbatch_size)
+            # In-place copy
+            batch[tuple(slices)] = subbatch
+            current_idx += subbatch_size
+
         return batch, indices
 
     @classmethod
@@ -226,6 +307,12 @@ class NdarrayContainer(DataContainer["ext.NpNDArray", "ext.NpNDArray"]):
         indices: t.Sequence[int],
         batch_dim: int = 0,
     ) -> list[ext.NpNDArray]:
+        """
+        Split a batch into individual arrays.
+
+        Note: np.split returns views when possible, which is already zero-copy.
+        This behavior is maintained regardless of the zero_copy setting.
+        """
         return np.split(batch, indices[1:-1], axis=batch_dim)
 
     @classmethod

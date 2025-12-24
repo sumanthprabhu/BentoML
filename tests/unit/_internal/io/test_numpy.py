@@ -213,3 +213,65 @@ async def test_to_proto() -> None:
         dtype=pb.NDArray.DType.DTYPE_DOUBLE,
         double_values=example.ravel().tolist(),
     )
+
+
+def test_zero_copy_tensor_schema():
+    """Test TensorSchema with zero_copy enabled."""
+    from _bentoml_sdk.validators import TensorSchema
+
+    schema = TensorSchema(format="numpy-array", zero_copy=True)
+    assert schema.zero_copy is True
+
+    schema_no_copy = TensorSchema(format="numpy-array", zero_copy=False)
+    assert schema_no_copy.zero_copy is False
+
+    schema_default = TensorSchema(format="numpy-array")
+    assert schema_default.zero_copy is False
+
+
+def test_zero_copy_validate_from_buffer():
+    """Test that zero_copy TensorSchema can validate from buffer."""
+    from _bentoml_sdk.validators import TensorSchema
+
+    schema = TensorSchema(format="numpy-array", dtype="float64", zero_copy=True)
+
+    # Create test data
+    original = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64)
+    buffer = original.tobytes()
+
+    # Validate from bytes
+    result = schema.validate(buffer)
+    np.testing.assert_array_equal(result, original)
+
+
+def test_zero_copy_validate_with_shape():
+    """Test that zero_copy TensorSchema reshapes correctly."""
+    from _bentoml_sdk.validators import TensorSchema
+
+    schema = TensorSchema(
+        format="numpy-array", dtype="float64", shape=(2, 2), zero_copy=True
+    )
+
+    # Create test data
+    original = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float64)
+    buffer = original.tobytes()
+
+    # Validate from bytes
+    result = schema.validate(buffer)
+    assert result.shape == (2, 2)
+    np.testing.assert_array_equal(result, original)
+
+
+def test_zero_copy_validate_memoryview():
+    """Test that zero_copy TensorSchema can validate from memoryview."""
+    from _bentoml_sdk.validators import TensorSchema
+
+    schema = TensorSchema(format="numpy-array", dtype="float32", zero_copy=True)
+
+    # Create test data
+    original = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    mv = memoryview(original.tobytes())
+
+    # Validate from memoryview
+    result = schema.validate(mv)
+    np.testing.assert_array_equal(result, original)

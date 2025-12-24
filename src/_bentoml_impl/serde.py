@@ -284,8 +284,72 @@ class PickleSerde(GenericSerde, Serde):
         return pickle.loads(main_bytes, buffers=buffers)
 
 
+class ZeroCopySerde(GenericSerde, Serde):
+    """Zero-copy serialization using PEP 574 out-of-band buffers.
+
+    This serde avoids memory copies for numpy arrays and other buffer-protocol
+    objects by using pickle protocol 5's out-of-band buffer mechanism.
+    """
+
+    media_type = "application/vnd.bentoml+zerocopy"
+
+    def serialize_model(self, model: IODescriptor) -> Payload:
+        model_data = model.model_dump()
+        return self.serialize_value(model_data)
+
+    def deserialize_model(self, payload: Payload, cls: type[T]) -> T:
+        obj = self.deserialize_value(payload)
+        if not isinstance(obj, cls):
+            obj = cls.model_validate(obj)
+        return obj
+
+    def serialize_value(self, obj: t.Any) -> Payload:
+        """Serialize with zero-copy for buffer-protocol objects."""
+        buffers: list[pickle.PickleBuffer] = []
+        main_bytes = pickle.dumps(obj, protocol=5, buffer_callback=buffers.append)
+
+        # Build data list with memoryviews (zero-copy)
+        data: list[bytes | memoryview] = [main_bytes]
+        lengths = [len(main_bytes)]
+
+        for buff in buffers:
+            # Use raw() to get memoryview without copying
+            raw = buff.raw()
+            data.append(raw)
+            lengths.append(len(raw))
+
+        metadata = {
+            "buffer-lengths": ",".join(map(str, lengths)),
+            "zero-copy": "true",
+        }
+        return Payload(data, metadata)
+
+    def deserialize_value(self, payload: Payload) -> t.Any:
+        """Deserialize with zero-copy buffer reconstruction."""
+        if "buffer-lengths" not in payload.metadata:
+            return pickle.loads(b"".join(payload.data))
+
+        buffer_lengths = list(map(int, payload.metadata["buffer-lengths"].split(",")))
+
+        # Join data once and create memoryview for zero-copy slicing
+        data_stream = b"".join(payload.data)
+        data = memoryview(data_stream)
+
+        start = buffer_lengths[0]
+        main_bytes = bytes(data[:start])
+
+        # Create PickleBuffers from memoryview slices (zero-copy)
+        buffers: list[pickle.PickleBuffer] = []
+        for length in buffer_lengths[1:]:
+            # memoryview slicing is zero-copy
+            buffers.append(pickle.PickleBuffer(data[start : start + length]))
+            start += length
+
+        return pickle.loads(main_bytes, buffers=buffers)
+
+
 ALL_SERDE: t.Mapping[str, type[Serde]] = {
-    s.media_type: s for s in [JSONSerde, PickleSerde, MultipartSerde]
+    s.media_type: s for s in [JSONSerde, PickleSerde, MultipartSerde, ZeroCopySerde]
 }
 # Special case for application/x-www-form-urlencoded
 ALL_SERDE["application/x-www-form-urlencoded"] = MultipartSerde

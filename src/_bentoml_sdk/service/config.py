@@ -276,6 +276,7 @@ class ServiceConfig(TypedDict, total=False):
     tracing: TracingSchema
     monitoring: MonitoringSchema
     endpoints: EndpointsSchema
+    zero_copy: bool
 
 
 schema_type = TypeAdapter(ServiceConfig)

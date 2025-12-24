@@ -168,6 +168,11 @@ class Service(t.Generic[T_co]):
     def has_custom_command(self) -> bool:
         return hasattr(self.inner, "__command__") or self.cmd is not None
 
+    @property
+    def zero_copy(self) -> bool:
+        """Return whether zero-copy tensor serialization is enabled."""
+        return self.config.get("zero_copy", False)
+
     @_caller_module.default  # type: ignore
     def _get_caller_module(self) -> str:
         if __name__ == "__main__":

@@ -173,3 +173,52 @@ def test_api_root_input_illegal():
         @bentoml.api
         def root_input(_, name: str, /, age: int) -> str:
             return name
+
+
+def test_service_zero_copy_default():
+    """Test that zero_copy defaults to False."""
+
+    @bentoml.service
+    class TestService:
+        @bentoml.api
+        def hello(self, name: str) -> str:
+            return f"Hello, {name}!"
+
+    assert TestService.zero_copy is False
+
+
+def test_service_zero_copy_enabled():
+    """Test that zero_copy can be enabled."""
+
+    @bentoml.service(zero_copy=True)
+    class TestService:
+        @bentoml.api
+        def hello(self, name: str) -> str:
+            return f"Hello, {name}!"
+
+    assert TestService.zero_copy is True
+
+
+def test_service_zero_copy_disabled():
+    """Test that zero_copy can be explicitly disabled."""
+
+    @bentoml.service(zero_copy=False)
+    class TestService:
+        @bentoml.api
+        def hello(self, name: str) -> str:
+            return f"Hello, {name}!"
+
+    assert TestService.zero_copy is False
+
+
+def test_service_zero_copy_in_config():
+    """Test that zero_copy is stored in service config."""
+
+    @bentoml.service(zero_copy=True, traffic={"timeout": 30})
+    class TestService:
+        @bentoml.api
+        def hello(self, name: str) -> str:
+            return f"Hello, {name}!"
+
+    assert TestService.config.get("zero_copy") is True
+    assert TestService.config.get("traffic", {}).get("timeout") == 30

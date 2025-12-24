@@ -6,6 +6,7 @@ import typing as t
 from typing import TYPE_CHECKING
 
 import cloudpickle
+import numpy as np
 import pytest
 import yaml
 
@@ -161,3 +162,64 @@ def fixture_propagate_logs() -> t.Generator[None, None, None]:
     yield
     # restore propagate to False after tests
     logger.propagate = False
+
+
+@pytest.fixture
+def reset_zero_copy_state():
+    """Reset zero-copy global state before and after tests."""
+    try:
+        from _bentoml_impl.zero_copy_config import ZeroCopyConfig
+        from _bentoml_impl.zero_copy_config import _zero_copy_enabled
+        from _bentoml_impl.zero_copy_config import set_default_config
+        from _bentoml_impl.zero_copy_config import set_zero_copy_enabled
+
+        # Store original state
+        original_enabled = _zero_copy_enabled.get()
+        original_config = ZeroCopyConfig()
+
+        yield
+
+        # Reset to original state
+        set_zero_copy_enabled(original_enabled)
+        set_default_config(original_config)
+    except ImportError:
+        yield
+
+
+@pytest.fixture
+def enable_zero_copy():
+    """Enable zero-copy for a test."""
+    try:
+        from _bentoml_impl.zero_copy_config import _zero_copy_enabled
+        from _bentoml_impl.zero_copy_config import set_zero_copy_enabled
+
+        # Store original state
+        original_token = set_zero_copy_enabled(True)
+
+        yield
+
+        # Reset
+        _zero_copy_enabled.reset(original_token)
+    except ImportError:
+        yield
+
+
+@pytest.fixture
+def sample_numpy_arrays():
+    """Provide sample numpy arrays for testing."""
+    return {
+        "small_1d": np.array([1.0, 2.0, 3.0], dtype=np.float64),
+        "small_2d": np.array([[1, 2], [3, 4]], dtype=np.int64),
+        "large_2d": np.random.randn(100, 100).astype(np.float32),
+        "non_contiguous": np.array([[1, 2], [3, 4], [5, 6]]).T,
+    }
+
+
+@pytest.fixture
+def sample_batches():
+    """Provide sample batches for testing batch operations."""
+    return [
+        np.array([[1, 2], [3, 4]]),
+        np.array([[5, 6], [7, 8]]),
+        np.array([[9, 10], [11, 12]]),
+    ]

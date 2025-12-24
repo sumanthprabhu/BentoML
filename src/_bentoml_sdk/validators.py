@@ -176,6 +176,7 @@ class TensorSchema:
     format: TensorFormat
     dtype: t.Optional[str] = None
     shape: t.Optional[t.Tuple[int, ...]] = None
+    zero_copy: bool = False
 
     @property
     def dim(self) -> int | None:
@@ -196,6 +197,7 @@ class TensorSchema:
                         "dtype": self.dtype,
                         "shape": self.shape,
                         "dim": self.dim,
+                        "zero_copy": self.zero_copy if self.zero_copy else None,
                     }
                 )
             )
@@ -236,6 +238,10 @@ class TensorSchema:
             numpy_array = numpy_array.flatten()
         if info.mode_is_json():
             return numpy_array.tolist()
+        # For zero-copy mode in pickle serialization, return array directly
+        # The pickle protocol 5 will handle it with out-of-band buffers
+        if self.zero_copy and not info.mode_is_json():
+            return numpy_array
         return numpy_array
 
     @property
@@ -255,6 +261,13 @@ class TensorSchema:
         if self.format == "numpy-array":
             if isinstance(obj, np.ndarray):
                 return obj
+            # For zero-copy, try to use frombuffer if possible
+            if self.zero_copy and isinstance(obj, (bytes, memoryview, bytearray)):
+                dtype = self.framework_dtype or np.float64
+                arr = np.frombuffer(obj, dtype=dtype)
+                if self.shape is not None:
+                    arr = arr.reshape(self.shape)
+                return arr
             arr = np.array(obj, dtype=self.framework_dtype)
             if self.shape is not None:
                 arr = arr.reshape(self.shape)

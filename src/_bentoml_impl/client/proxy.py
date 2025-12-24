@@ -41,6 +41,9 @@ class RemoteProxy(AbstractClient, t.Generic[T]):
             timeout = (
                 svc_config.get(service.name, {}).get("traffic", {}).get("timeout") or 60
             ) * 1.01  # get the service timeout add 1% margin for the client
+            # Check if zero_copy is enabled and use appropriate media type
+            if service.zero_copy:
+                media_type = "application/vnd.bentoml+zerocopy"
         else:
             timeout = 60
         self._sync = SyncHTTPClient(

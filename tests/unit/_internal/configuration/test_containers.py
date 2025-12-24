@@ -175,3 +175,41 @@ api_server:
     monkeypatch.setenv("KEYFILE_PASSWORD", "654321")
     config = container_from_file(CONFIG)
     assert config["api_server"]["ssl"]["keyfile_password"] == "654321"
+
+
+@pytest.mark.usefixtures("container_from_file")
+def test_service_zero_copy_configuration(
+    container_from_file: t.Callable[[str], ConfigDictType],
+):
+    """Test that zero_copy configuration is properly loaded."""
+    ZERO_COPY_CONFIG = """\
+services:
+    test_service:
+        zero_copy: true
+        traffic:
+            timeout: 30
+    test_service_no_zerocopy:
+        zero_copy: false
+"""
+    bentoml_cfg = container_from_file(ZERO_COPY_CONFIG)
+    services_cfg = bentoml_cfg["services"]
+
+    # Test service with zero_copy enabled
+    test_service = services_cfg["test_service"]
+    assert test_service.get("zero_copy") is True
+    assert test_service["traffic"]["timeout"] == 30
+
+    # Test service with zero_copy disabled
+    test_service_no_zerocopy = services_cfg["test_service_no_zerocopy"]
+    assert test_service_no_zerocopy.get("zero_copy") is False
+
+
+@pytest.mark.usefixtures("container_from_envvar")
+def test_zero_copy_from_envvar(
+    container_from_envvar: t.Callable[[str], ConfigDictType],
+):
+    """Test that zero_copy can be set via environment variable."""
+    envvar = "services.my_service.zero_copy=true services.my_service.traffic.timeout=60"
+    config = container_from_envvar(envvar)
+    assert config["services"]["my_service"]["zero_copy"] is True
+    assert config["services"]["my_service"]["traffic"]["timeout"] == 60

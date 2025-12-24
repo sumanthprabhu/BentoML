@@ -12,6 +12,16 @@ SchemaDict: t.TypeAlias = t.Dict[str, t.Any]
 T = t.TypeVar("T", bound=BaseModel)
 
 
+def _get_zero_copy_enabled() -> bool:
+    """Get whether zero-copy is enabled from config module."""
+    try:
+        from _bentoml_impl.zero_copy_config import get_zero_copy_enabled
+
+        return get_zero_copy_enabled()
+    except ImportError:
+        return False
+
+
 def model_to_arrow_schema(model: type[BaseModel]) -> pa.Schema:
     schema = model.model_json_schema(mode="serialization")
     fields = _model_to_fields(schema, ref_defs=schema.get("$defs", {}))
@@ -89,7 +99,26 @@ def _field_to_arrow(
     return pa.field(name, _field_schema_to_arrow(field, ref_defs), is_nullable(field))
 
 
-def serialize_to_arrow(model: BaseModel, out_stream: t.BinaryIO) -> None:
+def serialize_to_arrow(
+    model: BaseModel,
+    out_stream: t.BinaryIO,
+    *,
+    zero_copy: bool | None = None,
+) -> None:
+    """
+    Serialize a Pydantic model to Arrow IPC format.
+
+    Uses arrow_serialization context to ensure tensors are properly flattened
+    for the current Arrow schema representation.
+
+    Args:
+        model: The Pydantic model to serialize
+        out_stream: Binary stream to write to
+        zero_copy: Override zero-copy setting. If None, uses global setting.
+    """
+    if zero_copy is None:
+        zero_copy = _get_zero_copy_enabled()
+
     arrow_schema = model_to_arrow_schema(model.__class__)
     with arrow_serialization():
         table = pa.Table.from_pylist([model.model_dump()], schema=arrow_schema)
@@ -97,8 +126,42 @@ def serialize_to_arrow(model: BaseModel, out_stream: t.BinaryIO) -> None:
         writer.write_table(table)
 
 
-def deserialize_from_arrow(model: type[T], in_stream: t.BinaryIO) -> T:
+def deserialize_from_arrow(
+    model: type[T],
+    in_stream: t.BinaryIO,
+    *,
+    zero_copy: bool | None = None,
+) -> T:
+    """
+    Deserialize a Pydantic model from Arrow IPC format.
+
+    Uses zero-copy reading where possible for efficient deserialization.
+
+    Args:
+        model: The Pydantic model class to deserialize to
+        in_stream: Binary stream to read from
+        zero_copy: Override zero-copy setting. If None, uses global setting.
+
+    Returns:
+        Instance of the model class
+    """
+    if zero_copy is None:
+        zero_copy = _get_zero_copy_enabled()
+
     with pa.ipc.open_stream(in_stream) as reader:
-        df = reader.read_pandas()
+        # Use zero_copy_only=False as we may need to convert types
+        # The underlying Arrow buffers can still be zero-copy accessed
+        table = reader.read_all()
+
+        if zero_copy:
+            # Convert to pandas with zero-copy for compatible types
+            df = table.to_pandas(
+                self_destruct=True,  # Allow Arrow to reclaim memory
+                split_blocks=True,  # Optimize memory layout
+            )
+        else:
+            # Standard conversion
+            df = table.to_pandas()
+
         ins = df.to_dict(orient="records")[0]
     return model(**ins)

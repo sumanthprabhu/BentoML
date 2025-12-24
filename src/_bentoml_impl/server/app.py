@@ -777,6 +777,12 @@ class ServiceAppFactory(BaseAppFactory):
                 "application/vnd.bentoml+pickle is not allowed in main server",
                 error_code=HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
             )
+        # Also block zerocopy on main server for security
+        if self.is_main and media_type == "application/vnd.bentoml+zerocopy":
+            raise BentoMLException(
+                "application/vnd.bentoml+zerocopy is not allowed in main server",
+                error_code=HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+            )
 
         method = self.service.apis[name]
         func = getattr(self._service_instance, name).local
