@@ -71,6 +71,34 @@ class ContextMiddleware:
             await self.app(scope, receive, send)
 
 
+class ZeroCopyMiddleware:
+    """
+    Middleware that sets the zero-copy context variable for the duration of each request.
+
+    This ensures that when a service is configured with `zero_copy=True`, the context
+    variable is set during request handling, enabling optimized code paths in
+    NdarrayContainer and other zero-copy utilities.
+    """
+
+    def __init__(self, app: ext.ASGIApp, zero_copy_enabled: bool) -> None:
+        self.app = app
+        self.zero_copy_enabled = zero_copy_enabled
+
+    async def __call__(
+        self, scope: ext.ASGIScope, receive: ext.ASGIReceive, send: ext.ASGISend
+    ) -> None:
+        if scope["type"] not in ("http",):
+            return await self.app(scope, receive, send)
+
+        if self.zero_copy_enabled:
+            from _bentoml_impl.zero_copy_config import ZeroCopyContext
+
+            with ZeroCopyContext(enabled=True):
+                await self.app(scope, receive, send)
+        else:
+            await self.app(scope, receive, send)
+
+
 class ServiceAppFactory(BaseAppFactory):
     @inject
     def __init__(
@@ -296,6 +324,16 @@ class ServiceAppFactory(BaseAppFactory):
             middlewares.append(
                 Middleware(CORSMiddleware, **self.access_control_options)
             )
+
+        # ZeroCopyMiddleware - sets zero_copy context for request handling
+        # Must be added before ContextMiddleware to ensure context is set
+        # before any request processing that might use zero-copy optimizations
+        middlewares.append(
+            Middleware(
+                ZeroCopyMiddleware,
+                zero_copy_enabled=self.service.zero_copy,
+            )
+        )
 
         # ContextMiddleware
         middlewares.append(Middleware(ContextMiddleware, context=self.service.context))
